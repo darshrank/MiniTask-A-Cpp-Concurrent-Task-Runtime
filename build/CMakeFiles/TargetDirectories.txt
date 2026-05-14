@@ -1,0 +1,3 @@
+/mnt/c/Users/20190/MiniTask-A-Cpp-Concurrent-Task-Runtime/build/CMakeFiles/minitask.dir
+/mnt/c/Users/20190/MiniTask-A-Cpp-Concurrent-Task-Runtime/build/CMakeFiles/edit_cache.dir
+/mnt/c/Users/20190/MiniTask-A-Cpp-Concurrent-Task-Runtime/build/CMakeFiles/rebuild_cache.dir
