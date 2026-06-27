@@ -10,67 +10,160 @@
 #include <stdexcept>
 #include <future>
 #include <type_traits>
+#include <iostream>
 
 enum class TaskPriority {
     HIGH,
     LOW
 };
 
+struct WorkerQueue {
+    std::queue<std::function<void()>> highPriorityTasks;
+    std::queue<std::function<void()>> lowPriorityTasks;
+    std::mutex mutex;
+};
+
 class ThreadPool {
 private:
     std::vector<std::thread> workers;
-    std::queue<std::function<void()>> highPriorityTasks;
-    std::queue<std::function<void()>> lowPriorityTasks;
+    std::vector<std::unique_ptr<WorkerQueue>> workerQueues;
+    std::vector<std::size_t> highTasksProcessed;
 
-    mutable std::mutex queueMutex;
+    mutable std::mutex stateMutex;
     std::condition_variable condition;
 
     std::atomic<std::size_t> submittedCount{0};
     std::atomic<std::size_t> completedCount{0};
-    std::size_t highTasksProcessed = 0; //Protected by queue mutex, so no atomic needed.
+    std::atomic<std::size_t> nextQueue{0};
+    std::atomic<std::size_t> totalQueuedTasks{0};
 
-    bool stopping = false;
+    std::atomic<bool> stopping{false};
 
     std::size_t maxQueueSize;
     std::condition_variable spaceAvailable;
 
-    void workerLoop() {
-        while(true) {
+    std::condition_variable completionCondition;
+
+    void workerLoop(std::size_t workerId) {
+        constexpr std::size_t HIGH_BURST_LIMIT = 3;
+
+        while (true) {
             std::function<void()> task;
 
+            // Sleep until work exists or shutdown begins
             {
-                std::unique_lock<std::mutex> lock(queueMutex);
+                std::unique_lock<std::mutex> stateLock(stateMutex);
 
-                condition.wait(lock, [this] {
-                    return stopping || !highPriorityTasks.empty() || !lowPriorityTasks.empty();
+                condition.wait(stateLock, [this] {
+                    return stopping.load(std::memory_order_relaxed) ||
+                        totalQueuedTasks.load(std::memory_order_relaxed) > 0;
                 });
 
-                if (stopping && highPriorityTasks.empty() && lowPriorityTasks.empty()) {
+                if (stopping.load(std::memory_order_relaxed) &&
+                    totalQueuedTasks.load(std::memory_order_relaxed) == 0) {
                     return;
                 }
-                
-                constexpr std::size_t HIGH_BURST_LIMIT = 3;
-                if (!highPriorityTasks.empty() &&
-                    (highTasksProcessed < HIGH_BURST_LIMIT ||
-                    lowPriorityTasks.empty())) {
-
-                    task = std::move(highPriorityTasks.front());
-                    highPriorityTasks.pop();
-
-                    ++highTasksProcessed;
-
-                } else {
-
-                    task = std::move(lowPriorityTasks.front());
-                    lowPriorityTasks.pop();
-
-                    highTasksProcessed = 0;
-                }
-                
-                spaceAvailable.notify_one();
             }
 
-            task();
+            // Try own queue first
+            {
+                std::lock_guard<std::mutex> queueLock(
+                    workerQueues[workerId]->mutex);
+
+                if (!workerQueues[workerId]->highPriorityTasks.empty() &&
+                    (highTasksProcessed[workerId] < HIGH_BURST_LIMIT ||
+                    workerQueues[workerId]->lowPriorityTasks.empty())) {
+
+                    task = std::move(
+                        workerQueues[workerId]->highPriorityTasks.front());
+
+                    workerQueues[workerId]->highPriorityTasks.pop();
+
+                    highTasksProcessed[workerId]++;
+
+                    totalQueuedTasks.fetch_sub(
+                        1,
+                        std::memory_order_relaxed);
+                }
+                else if (!workerQueues[workerId]->lowPriorityTasks.empty()) {
+
+                    task = std::move(
+                        workerQueues[workerId]->lowPriorityTasks.front());
+
+                    workerQueues[workerId]->lowPriorityTasks.pop();
+
+                    highTasksProcessed[workerId] = 0;
+
+                    totalQueuedTasks.fetch_sub(
+                        1,
+                        std::memory_order_relaxed);
+                }
+            }
+
+            // Work stealing
+            if (!task) {
+
+                for (std::size_t i = 0;
+                    i < workerQueues.size();
+                    ++i) {
+
+                    if (i == workerId) {
+                        continue;
+                    }
+
+                    std::lock_guard<std::mutex> victimLock(
+                        workerQueues[i]->mutex);
+
+                    if (!workerQueues[i]->highPriorityTasks.empty() &&
+                        (highTasksProcessed[workerId] < HIGH_BURST_LIMIT ||
+                        workerQueues[i]->lowPriorityTasks.empty())) {
+
+                        task = std::move(
+                            workerQueues[i]->highPriorityTasks.front());
+
+                        workerQueues[i]->highPriorityTasks.pop();
+
+                        highTasksProcessed[workerId]++;
+
+                        totalQueuedTasks.fetch_sub(
+                            1,
+                            std::memory_order_relaxed);
+
+                        break;
+                    }
+
+                    if (!workerQueues[i]->lowPriorityTasks.empty()) {
+
+                        task = std::move(
+                            workerQueues[i]->lowPriorityTasks.front());
+
+                        workerQueues[i]->lowPriorityTasks.pop();
+
+                        highTasksProcessed[workerId] = 0;
+
+                        totalQueuedTasks.fetch_sub(
+                            1,
+                            std::memory_order_relaxed);
+
+                        break;
+                    }
+                }
+            }
+
+            if (task) {
+                spaceAvailable.notify_one();
+
+                try {
+                    task();
+                }
+                catch (const std::exception& ex) {
+                    std::cerr << "Worker caught exception: "
+                            << ex.what() << '\n';
+                }
+                catch (...) {
+                    std::cerr << "Worker caught unknown exception\n";
+                }
+            }
         }
     }
 
@@ -80,9 +173,17 @@ public:
             throw std::invalid_argument("ThreadPool must have atleast one thread");
         }
 
+        highTasksProcessed.resize(numThreads, 0);
+
         for (std::size_t i = 0; i < numThreads; ++i) {
-            workers.emplace_back([this]{
-                workerLoop();
+            workerQueues.push_back(
+                std::make_unique<WorkerQueue>()
+            );
+        }
+
+        for (std::size_t i = 0; i < numThreads; ++i) {
+            workers.emplace_back([this, i]{
+                workerLoop(i);
             });
         }
     }
@@ -94,6 +195,16 @@ public:
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
+    void wait() {
+        const std::size_t target = submittedCount.load(std::memory_order_relaxed);
+
+        std::unique_lock<std::mutex> lock(stateMutex);
+
+        completionCondition.wait(lock, [this, target] {
+            return completedCount.load(std::memory_order_relaxed) >= target;
+        });
+    }
+
     template <typename Func>
     auto submit(TaskPriority priority, Func&& func) -> std::future<std::invoke_result_t<Func>> {
         using ReturnType = std::invoke_result_t<Func>;
@@ -103,33 +214,38 @@ public:
         );
 
         std::future<ReturnType> result = task->get_future();
+        std::size_t queueIndex = nextQueue.fetch_add(1) % workerQueues.size();
 
         {
-            std::unique_lock<std::mutex> lock(queueMutex);
+            std::unique_lock<std::mutex> lock(workerQueues[queueIndex]->mutex);    
 
-            spaceAvailable.wait(lock, [this, priority] {
-                return ( priority == TaskPriority::HIGH 
-                    ? highPriorityTasks.size() < maxQueueSize 
-                    : lowPriorityTasks.size() < maxQueueSize 
-                ) || stopping;
+            spaceAvailable.wait(lock, [this, priority, queueIndex] {
+                return ( workerQueues[queueIndex]->highPriorityTasks.size() + 
+                workerQueues[queueIndex]->lowPriorityTasks.size()  
+                ) < maxQueueSize || stopping.load(std::memory_order_relaxed);
             });
 
-            if (stopping) {
+            if (stopping.load(std::memory_order_relaxed)) {
                 throw std::runtime_error("Cannot submit task after shutdown");
             }
 
             if (priority == TaskPriority::HIGH) {
-                highPriorityTasks.push([task, this] {
+                workerQueues[queueIndex]->highPriorityTasks.push([task, this] {
                     (*task)();
                     completedCount.fetch_add(1, std::memory_order_relaxed);
+
+                    completionCondition.notify_all();
                 });
             } else {
-                lowPriorityTasks.push([task, this] {
+                workerQueues[queueIndex]->lowPriorityTasks.push([task, this] {
                     (*task)();
                     completedCount.fetch_add(1, std::memory_order_relaxed);
+
+                    completionCondition.notify_all();
                 });
             }
-
+            
+            totalQueuedTasks.fetch_add(1, std::memory_order_relaxed);
             submittedCount.fetch_add(1, std::memory_order_relaxed);
         }
 
@@ -139,20 +255,16 @@ public:
     }
 
     void shutdown() {
-        {
-            std::lock_guard<std::mutex> lock(queueMutex);
-
-            if (stopping) {
-                return;
-            }
-
-            stopping = true;
+        if (stopping.exchange(true, std::memory_order_relaxed)) {
+            return;
         }
 
         condition.notify_all();
+        spaceAvailable.notify_all();
+        completionCondition.notify_all();
 
         for (std::thread& worker : workers) {
-            if(worker.joinable()) {
+            if (worker.joinable()) {
                 worker.join();
             }
         }
@@ -167,7 +279,6 @@ public:
     }
 
     std::size_t queuedTasks() const {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        return highPriorityTasks.size() + lowPriorityTasks.size();
+        return totalQueuedTasks.load(std::memory_order_relaxed);
     }
 };

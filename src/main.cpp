@@ -1,68 +1,83 @@
 #include "ThreadPool.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <iostream>
 #include <thread>
 #include <vector>
 
 int main() {
-    ThreadPool pool(3, 5);
 
-    std::vector<std::future<int>> results;
+    ThreadPool pool(8, 1000);
 
-    // Submit HIGH priority tasks
-    for (int i = 0; i < 10; ++i) {
-        results.push_back(
-            pool.submit(TaskPriority::HIGH, [i] {
+    std::atomic<int> accepted{0};
+    std::atomic<int> rejected{0};
 
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(100));
+    std::vector<std::thread> producers;
 
-                std::cout << "[HIGH] Task "
-                          << i
-                          << " executed\n";
+    for (int p = 0; p < 8; ++p) {
 
-                return i;
-            })
-        );
+        producers.emplace_back([&] {
+
+            while (true) {
+
+                try {
+
+                    pool.submit(
+                        TaskPriority::HIGH,
+                        [] {
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(1));
+                        });
+
+                    accepted.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+
+                } catch (const std::runtime_error&) {
+
+                    rejected.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+
+                    break;
+                }
+            }
+        });
     }
 
-    // Submit LOW priority tasks
-    for (int i = 100; i < 105; ++i) {
-        results.push_back(
-            pool.submit(TaskPriority::LOW, [i] {
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(100));
 
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(150));
-
-                std::cout << "    [LOW] Task "
-                          << i
-                          << " executed\n";
-
-                return i;
-            })
-        );
-    }
-
-    // Wait for results
-    for (auto& future : results) {
-        future.get();
-    }
+    std::cout << "Calling shutdown...\n";
 
     pool.shutdown();
 
-    std::cout << "\n";
-    std::cout << "Submitted: "
+    std::cout << "Shutdown completed.\n";
+
+    for (auto& producer : producers) {
+        producer.join();
+    }
+
+    std::cout << "\n========== Results ==========\n";
+
+    std::cout << "Accepted: "
+              << accepted.load()
+              << '\n';
+
+    std::cout << "Rejected: "
+              << rejected.load()
+              << '\n';
+
+    std::cout << "Submitted Count: "
               << pool.submittedTasks()
-              << "\n";
+              << '\n';
 
-    std::cout << "Completed: "
+    std::cout << "Completed Count: "
               << pool.completedTasks()
-              << "\n";
+              << '\n';
 
-    std::cout << "Queued: "
+    std::cout << "Queued Count: "
               << pool.queuedTasks()
-              << "\n";
-
-    return 0;
+              << '\n';
 }

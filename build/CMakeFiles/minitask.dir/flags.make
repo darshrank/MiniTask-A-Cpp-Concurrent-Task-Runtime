@@ -6,5 +6,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/mnt/c/Users/20190/MiniTask-A-Cpp-Concurrent-Task-Runtime/include
 
-CXX_FLAGS = -std=gnu++20
+CXX_FLAGS = -fsanitize=address -fno-omit-frame-pointer -g -g -std=gnu++20
 

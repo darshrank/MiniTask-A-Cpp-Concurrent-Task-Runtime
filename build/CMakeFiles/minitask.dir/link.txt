@@ -1,1 +1,1 @@
-/usr/bin/c++ CMakeFiles/minitask.dir/src/main.cpp.o -o minitask 
+/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g CMakeFiles/minitask.dir/src/main.cpp.o -o minitask 
