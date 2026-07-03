@@ -281,4 +281,48 @@ public:
     std::size_t queuedTasks() const {
         return totalQueuedTasks.load(std::memory_order_relaxed);
     }
+
+    template <typename Func>
+    void submitDetached(TaskPriority priority, Func&& func) {
+        std::size_t queueIndex =
+            nextQueue.fetch_add(1, std::memory_order_relaxed)
+            % workerQueues.size();
+
+        {
+            std::unique_lock<std::mutex> lock(workerQueues[queueIndex]->mutex);
+
+            spaceAvailable.wait(lock, [this, queueIndex] {
+                return (workerQueues[queueIndex]->highPriorityTasks.size() +
+                        workerQueues[queueIndex]->lowPriorityTasks.size())
+                        < maxQueueSize
+                    || stopping.load(std::memory_order_relaxed);
+            });
+
+            if (stopping.load(std::memory_order_relaxed)) {
+                throw std::runtime_error("Cannot submit task after shutdown");
+            }
+
+            auto wrapper = [func = std::forward<Func>(func), this]() mutable {
+                try {
+                    func();
+                }
+                catch (...) {
+                }
+
+                completedCount.fetch_add(1, std::memory_order_relaxed);
+            };
+
+            if (priority == TaskPriority::HIGH) {
+                workerQueues[queueIndex]->highPriorityTasks.push(std::move(wrapper));
+            }
+            else {
+                workerQueues[queueIndex]->lowPriorityTasks.push(std::move(wrapper));
+            }
+
+            totalQueuedTasks.fetch_add(1, std::memory_order_relaxed);
+            submittedCount.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        condition.notify_one();
+    }
 };
