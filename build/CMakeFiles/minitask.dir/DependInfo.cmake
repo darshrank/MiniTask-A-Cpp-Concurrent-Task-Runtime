@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/mnt/c/Users/20190/MiniTask-A-Cpp-Concurrent-Task-Runtime/src/main.cpp" "CMakeFiles/minitask.dir/src/main.cpp.o" "gcc" "CMakeFiles/minitask.dir/src/main.cpp.o.d"
+  "/home/drank/MiniTask-A-Cpp-Concurrent-Task-Runtime/src/main.cpp" "CMakeFiles/minitask.dir/src/main.cpp.o" "gcc" "CMakeFiles/minitask.dir/src/main.cpp.o.d"
   )
 
 # Targets to which this target links.

@@ -11,6 +11,7 @@
 #include <future>
 #include <type_traits>
 #include <iostream>
+#include <random>
 
 enum class TaskPriority {
     HIGH,
@@ -44,6 +45,9 @@ private:
 
     std::condition_variable completionCondition;
 
+    std::atomic<std::size_t> stealAttempts{0};
+    std::atomic<std::size_t> successfulSteals{0};
+    
     void workerLoop(std::size_t workerId) {
         constexpr std::size_t HIGH_BURST_LIMIT = 3;
 
@@ -101,52 +105,110 @@ private:
             }
 
             // Work stealing
+            // if (!task) {
+
+            //     for (std::size_t i = 0;
+            //         i < workerQueues.size();
+            //         ++i) {
+
+            //         if (i == workerId) {
+            //             continue;
+            //         }
+
+            //         std::lock_guard<std::mutex> victimLock(
+            //             workerQueues[i]->mutex);
+
+            //         if (!workerQueues[i]->highPriorityTasks.empty() &&
+            //             (highTasksProcessed[workerId] < HIGH_BURST_LIMIT ||
+            //             workerQueues[i]->lowPriorityTasks.empty())) {
+
+            //             task = std::move(
+            //                 workerQueues[i]->highPriorityTasks.front());
+
+            //             workerQueues[i]->highPriorityTasks.pop();
+
+            //             highTasksProcessed[workerId]++;
+
+            //             totalQueuedTasks.fetch_sub(
+            //                 1,
+            //                 std::memory_order_relaxed);
+
+            //             break;
+            //         }
+
+            //         if (!workerQueues[i]->lowPriorityTasks.empty()) {
+
+            //             task = std::move(
+            //                 workerQueues[i]->lowPriorityTasks.front());
+
+            //             workerQueues[i]->lowPriorityTasks.pop();
+
+            //             highTasksProcessed[workerId] = 0;
+
+            //             totalQueuedTasks.fetch_sub(
+            //                 1,
+            //                 std::memory_order_relaxed);
+
+            //             break;
+            //         }
+            //     }
+            // }
+
+            // Work stealing
             if (!task) {
 
-                for (std::size_t i = 0;
-                    i < workerQueues.size();
-                    ++i) {
+                stealAttempts.fetch_add(1, std::memory_order_relaxed);
+                const std::size_t numWorkers = workerQueues.size();
 
-                    if (i == workerId) {
-                        continue;
-                    }
+                thread_local std::mt19937 rng(std::random_device{}());
 
-                    std::lock_guard<std::mutex> victimLock(
-                        workerQueues[i]->mutex);
+                std::uniform_int_distribution<std::size_t> dist(0, numWorkers - 2);
 
-                    if (!workerQueues[i]->highPriorityTasks.empty() &&
-                        (highTasksProcessed[workerId] < HIGH_BURST_LIMIT ||
-                        workerQueues[i]->lowPriorityTasks.empty())) {
+                std::size_t victim = dist(rng);
 
-                        task = std::move(
-                            workerQueues[i]->highPriorityTasks.front());
+                // Skip ourselves
+                if (victim >= workerId) {
+                    ++victim;
+                }
 
-                        workerQueues[i]->highPriorityTasks.pop();
+                std::lock_guard<std::mutex> victimLock(
+                    workerQueues[victim]->mutex);
 
-                        highTasksProcessed[workerId]++;
+                if (!workerQueues[victim]->highPriorityTasks.empty() &&
+                    (highTasksProcessed[workerId] < HIGH_BURST_LIMIT ||
+                    workerQueues[victim]->lowPriorityTasks.empty())) {
 
-                        totalQueuedTasks.fetch_sub(
-                            1,
-                            std::memory_order_relaxed);
+                    task = std::move(
+                        workerQueues[victim]->highPriorityTasks.front());
 
-                        break;
-                    }
+                    workerQueues[victim]->highPriorityTasks.pop();
 
-                    if (!workerQueues[i]->lowPriorityTasks.empty()) {
+                    highTasksProcessed[workerId]++;
 
-                        task = std::move(
-                            workerQueues[i]->lowPriorityTasks.front());
+                    totalQueuedTasks.fetch_sub(
+                        1,
+                        std::memory_order_relaxed);
+                    
+                    successfulSteals.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                }
+                else if (!workerQueues[victim]->lowPriorityTasks.empty()) {
 
-                        workerQueues[i]->lowPriorityTasks.pop();
+                    task = std::move(
+                        workerQueues[victim]->lowPriorityTasks.front());
 
-                        highTasksProcessed[workerId] = 0;
+                    workerQueues[victim]->lowPriorityTasks.pop();
 
-                        totalQueuedTasks.fetch_sub(
-                            1,
-                            std::memory_order_relaxed);
+                    highTasksProcessed[workerId] = 0;
 
-                        break;
-                    }
+                    totalQueuedTasks.fetch_sub(
+                        1,
+                        std::memory_order_relaxed);
+                    
+                    successfulSteals.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
                 }
             }
 
@@ -303,6 +365,7 @@ public:
             }
 
             auto wrapper = [func = std::forward<Func>(func), this]() mutable {
+
                 try {
                     func();
                 }
@@ -310,6 +373,8 @@ public:
                 }
 
                 completedCount.fetch_add(1, std::memory_order_relaxed);
+
+                completionCondition.notify_all();
             };
 
             if (priority == TaskPriority::HIGH) {
@@ -325,4 +390,12 @@ public:
 
         condition.notify_one();
     }
-};
+
+    std::size_t getStealAttempts() const {
+        return stealAttempts.load(std::memory_order_relaxed);
+    }
+
+    std::size_t getSuccessfulSteals() const {
+        return successfulSteals.load(std::memory_order_relaxed);
+    }
+    };
