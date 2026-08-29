@@ -1,0 +1,26 @@
+
+========== Scaling Benchmark ==========
+
+Policy: random
+
+Task iterations: 10000
+
+Workload: imbalanced
+
+Workers   Time(s)        Throughput(tasks/s) 
+---------------------------------------------
+1         24.221         41286               
+Steal Attempts    : 0
+Successful Steals : 0
+2         11.288         88587               
+Steal Attempts    : 245712
+Successful Steals : 245712
+4         5.550          180182              
+Steal Attempts    : 556008
+Successful Steals : 195499
+8         2.910          343699              
+Steal Attempts    : 755848
+Successful Steals : 143255
+16        1.688          592576              
+Steal Attempts    : 859899
+Successful Steals : 141500
