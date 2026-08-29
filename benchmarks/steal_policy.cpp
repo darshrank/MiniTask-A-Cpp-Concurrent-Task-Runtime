@@ -15,6 +15,11 @@ int main(int argc, char* argv[]) {
         policy = StealPolicy::LINEAR_SCAN;
     }
 
+    std::size_t taskIterations = 100;
+
+    if (argc > 2) {
+        taskIterations = std::stoull(argv[2]);
+    }
     constexpr std::size_t NUM_TASKS = 1'000'000;
     constexpr std::size_t QUEUE_SIZE = NUM_TASKS;
 
@@ -25,6 +30,9 @@ int main(int argc, char* argv[]) {
     std::cout << "\n========== Scaling Benchmark ==========\n\n";
     std::cout << "Policy: "
           << (policy == StealPolicy::RANDOM ? "random" : "linear")
+          << "\n\n";
+    std::cout << "Task iterations: "
+          << taskIterations
           << "\n\n";
     std::cout << std::left
               << std::setw(10) << "Workers"
@@ -44,12 +52,12 @@ int main(int argc, char* argv[]) {
 
             pool.submitDetached(
                 TaskPriority::HIGH,
-                [] {
+                [taskIterations] {
 
                     volatile int x = 0;
 
-                    for (int i = 0; i < 100; ++i) {
-                        x += i;
+                    for (std::size_t i = 0; i < taskIterations; ++i) {
+                        x += static_cast<int>(i);
                     }
                 });
         }
