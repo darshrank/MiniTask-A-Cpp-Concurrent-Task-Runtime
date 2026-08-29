@@ -33,3 +33,20 @@ compile_commands.json
 
 # Windows
 Thumbs.db
+# MiniTask compiled binaries
+/basic_test
+/exception_test
+/latency_benchmark
+/priorities_benchmark
+/priorities_test
+/queue_saturation_test
+/scaling_benchmark
+/shutdown_test
+/throughput_benchmark
+/throughput_raw
+/wait_test
+/work_stealing_test
+
+# Profiling output
+/perf.data
+/perf.data.old

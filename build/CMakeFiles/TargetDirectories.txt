@@ -1,3 +1,0 @@
-/home/drank/MiniTask-A-Cpp-Concurrent-Task-Runtime/build/CMakeFiles/minitask.dir
-/home/drank/MiniTask-A-Cpp-Concurrent-Task-Runtime/build/CMakeFiles/edit_cache.dir
-/home/drank/MiniTask-A-Cpp-Concurrent-Task-Runtime/build/CMakeFiles/rebuild_cache.dir
