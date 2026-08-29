@@ -18,6 +18,11 @@ enum class TaskPriority {
     LOW
 };
 
+enum class StealPolicy {
+    RANDOM,
+    LINEAR_SCAN
+};
+
 struct WorkerQueue {
     std::queue<std::function<void()>> highPriorityTasks;
     std::queue<std::function<void()>> lowPriorityTasks;
@@ -47,6 +52,8 @@ private:
 
     std::atomic<std::size_t> stealAttempts{0};
     std::atomic<std::size_t> successfulSteals{0};
+
+    StealPolicy stealPolicy;
     
     void workerLoop(std::size_t workerId) {
         constexpr std::size_t HIGH_BURST_LIMIT = 3;
@@ -105,57 +112,60 @@ private:
             }
 
             // Work stealing
-            // if (!task) {
+            if (!task && stealPolicy == StealPolicy::LINEAR_SCAN && workerQueues.size() > 1) {
 
-            //     for (std::size_t i = 0;
-            //         i < workerQueues.size();
-            //         ++i) {
+                for (std::size_t i = 0;
+                    i < workerQueues.size();
+                    ++i) {
 
-            //         if (i == workerId) {
-            //             continue;
-            //         }
+                    if (i == workerId) {
+                        continue;
+                    }
 
-            //         std::lock_guard<std::mutex> victimLock(
-            //             workerQueues[i]->mutex);
+                    stealAttempts.fetch_add(1, std::memory_order_relaxed);
 
-            //         if (!workerQueues[i]->highPriorityTasks.empty() &&
-            //             (highTasksProcessed[workerId] < HIGH_BURST_LIMIT ||
-            //             workerQueues[i]->lowPriorityTasks.empty())) {
+                    std::lock_guard<std::mutex> victimLock(
+                        workerQueues[i]->mutex);
 
-            //             task = std::move(
-            //                 workerQueues[i]->highPriorityTasks.front());
+                    if (!workerQueues[i]->highPriorityTasks.empty() &&
+                        (highTasksProcessed[workerId] < HIGH_BURST_LIMIT ||
+                        workerQueues[i]->lowPriorityTasks.empty())) {
 
-            //             workerQueues[i]->highPriorityTasks.pop();
+                        task = std::move(
+                            workerQueues[i]->highPriorityTasks.front());
 
-            //             highTasksProcessed[workerId]++;
+                        workerQueues[i]->highPriorityTasks.pop();
 
-            //             totalQueuedTasks.fetch_sub(
-            //                 1,
-            //                 std::memory_order_relaxed);
+                        highTasksProcessed[workerId]++;
 
-            //             break;
-            //         }
+                        totalQueuedTasks.fetch_sub(
+                            1,
+                            std::memory_order_relaxed);
+                        
+                        successfulSteals.fetch_add(1, std::memory_order_relaxed);
+                        break;
+                    }
 
-            //         if (!workerQueues[i]->lowPriorityTasks.empty()) {
+                    if (!workerQueues[i]->lowPriorityTasks.empty()) {
 
-            //             task = std::move(
-            //                 workerQueues[i]->lowPriorityTasks.front());
+                        task = std::move(
+                            workerQueues[i]->lowPriorityTasks.front());
 
-            //             workerQueues[i]->lowPriorityTasks.pop();
+                        workerQueues[i]->lowPriorityTasks.pop();
 
-            //             highTasksProcessed[workerId] = 0;
+                        highTasksProcessed[workerId] = 0;
 
-            //             totalQueuedTasks.fetch_sub(
-            //                 1,
-            //                 std::memory_order_relaxed);
+                        totalQueuedTasks.fetch_sub(
+                            1,
+                            std::memory_order_relaxed);
 
-            //             break;
-            //         }
-            //     }
-            // }
+                        break;
+                    }
+                }
+            }
 
             // Work stealing
-            if (!task) {
+            if (!task && stealPolicy == StealPolicy::RANDOM && workerQueues.size() > 1) {
 
                 stealAttempts.fetch_add(1, std::memory_order_relaxed);
                 const std::size_t numWorkers = workerQueues.size();
@@ -230,7 +240,8 @@ private:
     }
 
 public:
-    explicit ThreadPool(std::size_t numThreads, std::size_t queueSize): stopping(false), maxQueueSize(queueSize) {
+    explicit ThreadPool(std::size_t numThreads, std::size_t queueSize, StealPolicy policy = StealPolicy::RANDOM): 
+        stopping(false), maxQueueSize(queueSize), stealPolicy(policy) {
         if(numThreads == 0) {
             throw std::invalid_argument("ThreadPool must have atleast one thread");
         }
