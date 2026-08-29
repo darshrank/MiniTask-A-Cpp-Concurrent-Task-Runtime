@@ -48,8 +48,6 @@ private:
     std::size_t maxQueueSize;
     std::condition_variable spaceAvailable;
 
-    std::condition_variable completionCondition;
-
     std::atomic<std::size_t> stealAttempts{0};
     std::atomic<std::size_t> successfulSteals{0};
 
@@ -269,13 +267,21 @@ public:
     ThreadPool& operator=(const ThreadPool&) = delete;
 
     void wait() {
-        const std::size_t target = submittedCount.load(std::memory_order_relaxed);
+        const std::size_t target =
+            submittedCount.load(std::memory_order_relaxed);
 
-        std::unique_lock<std::mutex> lock(stateMutex);
+        std::size_t completed =
+            completedCount.load(std::memory_order_relaxed);
 
-        completionCondition.wait(lock, [this, target] {
-            return completedCount.load(std::memory_order_relaxed) >= target;
-        });
+        while (completed < target) {
+            completedCount.wait(
+                completed,
+                std::memory_order_relaxed
+            );
+
+            completed =
+                completedCount.load(std::memory_order_relaxed);
+        }
     }
 
     template <typename Func>
@@ -306,15 +312,13 @@ public:
                 workerQueues[queueIndex]->highPriorityTasks.push([task, this] {
                     (*task)();
                     completedCount.fetch_add(1, std::memory_order_relaxed);
-
-                    completionCondition.notify_all();
+                    completedCount.notify_all();
                 });
             } else {
                 workerQueues[queueIndex]->lowPriorityTasks.push([task, this] {
                     (*task)();
                     completedCount.fetch_add(1, std::memory_order_relaxed);
-
-                    completionCondition.notify_all();
+                    completedCount.notify_all();
                 });
             }
             
@@ -334,7 +338,6 @@ public:
 
         condition.notify_all();
         spaceAvailable.notify_all();
-        completionCondition.notify_all();
 
         for (std::thread& worker : workers) {
             if (worker.joinable()) {
@@ -384,8 +387,7 @@ public:
                 }
 
                 completedCount.fetch_add(1, std::memory_order_relaxed);
-
-                completionCondition.notify_all();
+                completedCount.notify_all();
             };
 
             if (priority == TaskPriority::HIGH) {
