@@ -1,0 +1,19 @@
+
+========== Priority Benchmark ==========
+
+Workers          : 8
+LOW Tasks        : 100000
+Mode             : priority
+LOW completed before urgent : 5283
+LOW backlog before urgent   : 94717
+Urgent Tasks       : 10000
+
+Urgent Task Scheduling Latency
+----------------------------
+Average : 2954399.8 ns
+p50     : 2828749 ns
+p95     : 5799782 ns
+p99     : 6099555 ns
+
+Completed Urgent : 10000
+Completed LOW  : 100000

@@ -51,3 +51,4 @@ Thumbs.db
 /perf.data
 /perf.data.old
 /steal_policy_benchmark
+/priority_latency_benchmark
