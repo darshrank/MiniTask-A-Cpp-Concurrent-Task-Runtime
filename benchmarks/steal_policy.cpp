@@ -20,6 +20,12 @@ int main(int argc, char* argv[]) {
     if (argc > 2) {
         taskIterations = std::stoull(argv[2]);
     }
+
+    std::string workload = "balanced";
+
+    if (argc > 3) {
+        workload = argv[3];
+    }
     constexpr std::size_t NUM_TASKS = 1'000'000;
     constexpr std::size_t QUEUE_SIZE = NUM_TASKS;
 
@@ -33,6 +39,9 @@ int main(int argc, char* argv[]) {
           << "\n\n";
     std::cout << "Task iterations: "
           << taskIterations
+          << "\n\n";
+    std::cout << "Workload: "
+          << workload
           << "\n\n";
     std::cout << std::left
               << std::setw(10) << "Workers"
@@ -50,13 +59,19 @@ int main(int argc, char* argv[]) {
 
         for (std::size_t i = 0; i < NUM_TASKS; ++i) {
 
+            std::size_t iterationsThisTask = taskIterations;
+
+            if (workload == "imbalanced") {
+                iterationsThisTask =
+                    (i % workers == 0) ? taskIterations * workers : 0;
+            }
             pool.submitDetached(
                 TaskPriority::HIGH,
-                [taskIterations] {
+                [iterationsThisTask] {
 
                     volatile int x = 0;
 
-                    for (std::size_t i = 0; i < taskIterations; ++i) {
+                    for (std::size_t i = 0; i < iterationsThisTask; ++i) {
                         x += static_cast<int>(i);
                     }
                 });
