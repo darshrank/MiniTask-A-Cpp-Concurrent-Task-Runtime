@@ -27,9 +27,16 @@ int main(int argc, char* argv[]) {
             : TaskPriority::HIGH;
 
     constexpr std::size_t NUM_WORKERS = 8;
-    constexpr std::size_t NUM_LOW_TASKS = 100000;
+    std::size_t NUM_LOW_TASKS = 100000;
+
+    if (argc > 2) {
+        NUM_LOW_TASKS = std::stoull(argv[2]);
+    }
+
     constexpr std::size_t NUM_HIGH_TASKS = 10000;
-    constexpr std::size_t QUEUE_SIZE = NUM_LOW_TASKS + NUM_HIGH_TASKS;
+
+    const std::size_t QUEUE_SIZE =
+        NUM_LOW_TASKS + NUM_HIGH_TASKS;
 
     ThreadPool pool(NUM_WORKERS, QUEUE_SIZE);
 
